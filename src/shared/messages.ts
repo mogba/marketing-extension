@@ -1,4 +1,4 @@
-import type { SocialProvider } from "./domain";
+import type { FormatDriftIssue, SocialProvider } from "./domain";
 
 export type CapturedPayloadMessage = {
   action: "CAPTURED_PAYLOAD";
@@ -53,6 +53,11 @@ export type ClearAllMessage = {
   action: "CLEAR_ALL";
 };
 
+export type FormatDriftDetectedMessage = Omit<FormatDriftIssue, "captured_at"> & {
+  action: "FORMAT_DRIFT_DETECTED";
+  timestamp: string;
+};
+
 export type PageSessionStartedMessage = {
   action: "PAGE_SESSION_STARTED";
   pageUrl: string;
@@ -94,6 +99,7 @@ export type RuntimeMessage =
   | GetEndpointPayloadsMessage
   | GetAllRawMessage
   | ClearAllMessage
+  | FormatDriftDetectedMessage
   | PageSessionStartedMessage
   | VisiblePublicationsMessage;
 

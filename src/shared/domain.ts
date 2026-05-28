@@ -41,7 +41,7 @@ export type SocialPublication = {
   author: SocialActor;
   capture_order?: number;
   capture_priority?: number;
-  captured_at?: string;
+  captured_at: string;
   visible_order?: number;
   visible_url?: string;
   created_at: string;
@@ -71,6 +71,7 @@ export type SocialPublication = {
 
 export type SocialComment = {
   author: SocialActor;
+  captured_at: string;
   comment_id: string;
   created_at: string;
   like_count: number;
@@ -82,6 +83,7 @@ export type SocialComment = {
 
 export type SocialEngagement = {
   actor: SocialActor;
+  captured_at: string;
   engaged_at?: null | string;
   engagement_id: string;
   kind: "comment" | "like";
@@ -110,6 +112,17 @@ export type EndpointStore = {
   provider: SocialProvider;
 };
 
+export type FormatDriftIssue = {
+  captured_at: string;
+  details?: Record<string, unknown>;
+  detector: string;
+  expected: string;
+  observed: string;
+  page_url?: string;
+  provider: SocialProvider;
+  severity: "error" | "info" | "warning";
+};
+
 export type BackgroundStore = {
   commentsByPublication: Record<string, SocialComment[]>;
   communityReplies: Record<string, SocialPublication>;
@@ -131,6 +144,7 @@ export type BackgroundStore = {
     text?: string;
     url: string;
   }>;
+  formatDriftIssues: FormatDriftIssue[];
   lastUpdated: null | string;
   nextCaptureOrder: number;
   pageSessionKey: string;
@@ -150,6 +164,7 @@ export type ExportJSON = {
   engagements_by_publication: Record<string, SocialEngagement[]>;
   exported_at: string;
   favoriters_by_tweet: Record<string, Favoriter[]>;
+  format_drift_issues: FormatDriftIssue[];
   publications: SocialPublication[];
   raw_payloads: Record<string, EndpointStore>;
   schema_version: 2;

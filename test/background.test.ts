@@ -324,7 +324,12 @@ describe("background controller", () => {
     const exported = app.sendMessage({ action: "GET_EXPORT" }) as {
       comments_by_publication: Record<string, unknown[]>;
       engagements_by_publication: Record<string, unknown[]>;
-      publications: Array<{ provider: string; shortcode?: string; type: string }>;
+      publications: Array<{
+        captured_at: string;
+        provider: string;
+        shortcode?: string;
+        type: string;
+      }>;
       summary: Record<string, any>;
       tracked_profiles: Record<string, { username: string }>;
     };
@@ -342,11 +347,18 @@ describe("background controller", () => {
     expect(response.engagementsCount).toBe(4);
 
     expect(exported.tracked_profiles.instagram?.username).toBe("he4rtdevs");
+    expect(
+      exported.publications.find((publication) => publication.shortcode === "ABC123")?.captured_at,
+    ).toBe("2026-05-20T13:00:00.000Z");
     expect(exported.summary.providers.instagram.total_publications).toBe(3);
     expect(exported.summary.providers.instagram.total_comments).toBe(2);
     expect(exported.summary.providers.instagram.total_engagements).toBe(4);
     expect(exported.comments_by_publication["instagram:391"]).toHaveLength(2);
     expect(exported.engagements_by_publication["instagram:391"]).toHaveLength(4);
+    expect(exported.comments_by_publication["instagram:391"]?.[0]).toMatchObject({
+      captured_at: "2026-05-20T13:02:00.000Z",
+    });
+    expect(exported.engagements_by_publication["instagram:391"]?.[0]).toHaveProperty("captured_at");
   });
 
   test("captura publicação principal renderizada por SSR e vincula comentários pelo shortcode", () => {
@@ -561,5 +573,45 @@ describe("background controller", () => {
       (app.sendMessage({ action: "GET_ENDPOINTS" }) as { endpoints: Record<string, unknown> })
         .endpoints,
     ).toEqual({});
+  });
+
+  test("registra drift de formato de forma genérica no export", () => {
+    const app = createHarness();
+
+    app.sendMessage({
+      action: "FORMAT_DRIFT_DETECTED",
+      provider: "instagram",
+      detector: "instagram-dom-publication-author",
+      severity: "warning",
+      expected: "Visible publication articles with profile links",
+      observed: "Most visible publications were extracted without author username",
+      page_url: "https://www.instagram.com/",
+      timestamp: "2026-05-20T17:00:00.000Z",
+      details: {
+        publication_count: 3,
+        missing_author_count: 3,
+      },
+    });
+    app.sendMessage({
+      action: "FORMAT_DRIFT_DETECTED",
+      provider: "instagram",
+      detector: "instagram-dom-publication-author",
+      severity: "warning",
+      expected: "Visible publication articles with profile links",
+      observed: "Most visible publications were extracted without author username",
+      page_url: "https://www.instagram.com/",
+      timestamp: "2026-05-20T17:01:00.000Z",
+    });
+
+    const exported = app.sendMessage({ action: "GET_EXPORT" }) as {
+      format_drift_issues: Array<{ captured_at: string; detector: string; provider: string }>;
+    };
+
+    expect(exported.format_drift_issues).toHaveLength(1);
+    expect(exported.format_drift_issues[0]).toMatchObject({
+      provider: "instagram",
+      detector: "instagram-dom-publication-author",
+      captured_at: "2026-05-20T17:00:00.000Z",
+    });
   });
 });

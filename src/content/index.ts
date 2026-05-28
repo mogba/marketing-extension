@@ -8,6 +8,7 @@ let scanTimerA: number | null = null;
 let scanTimerB: number | null = null;
 let extensionContextActive = true;
 let instagramObserver: MutationObserver | null = null;
+const reportedFormatDrift = new Set<string>();
 
 function stopAfterInvalidContext() {
   extensionContextActive = false;
@@ -47,6 +48,30 @@ function sendRuntimeMessage(message: Record<string, unknown>) {
     }
     throw error;
   }
+}
+
+function reportFormatDrift(
+  detector: string,
+  expected: string,
+  observed: string,
+  details?: Record<string, unknown>,
+) {
+  const provider = currentProvider();
+  if (!provider) return;
+  const key = `${provider}:${detector}:${observed}:${location.pathname}`;
+  if (reportedFormatDrift.has(key)) return;
+  reportedFormatDrift.add(key);
+  sendRuntimeMessage({
+    action: "FORMAT_DRIFT_DETECTED",
+    provider,
+    detector,
+    severity: "warning",
+    expected,
+    observed,
+    page_url: location.href,
+    timestamp: new Date().toISOString(),
+    details,
+  });
 }
 
 function currentProvider() {
@@ -281,6 +306,24 @@ function inferVisibleInstagramMediaType(
 function publishVisibleInstagramOrder() {
   if (!extensionContextActive) return;
   const items = collectVisibleInstagramPublications();
+  const articleCount = document.querySelectorAll("article").length;
+  const itemsWithoutAuthor = items.filter((item) => !item.author?.username).length;
+  if (articleCount > 0 && !items.length) {
+    reportFormatDrift(
+      "instagram-dom-publication-links",
+      "Visible Instagram articles containing canonical /p/{shortcode}/ or /reel/{shortcode}/ links",
+      "Visible articles exist but no canonical publication links were extracted",
+      { article_count: articleCount },
+    );
+  }
+  if (items.length > 0 && itemsWithoutAuthor / items.length > 0.5) {
+    reportFormatDrift(
+      "instagram-dom-publication-author",
+      "Visible Instagram publication articles with profile links for author extraction",
+      "Most visible publications were extracted without author username",
+      { publication_count: items.length, missing_author_count: itemsWithoutAuthor },
+    );
+  }
   if (!items.length) return;
   const signature = items.map((item) => item.shortcode).join(",");
   if (signature === lastVisibleOrderSignature) return;

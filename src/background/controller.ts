@@ -15,6 +15,7 @@ import {
 import type {
   BackgroundStore,
   ExportJSON,
+  FormatDriftIssue,
   SocialComment,
   SocialEngagement,
   SocialMetrics,
@@ -39,6 +40,7 @@ export function createStore(trackedHandle = ""): BackgroundStore {
     engagementsByPublication: {},
     instagramPublicationIdsByShortcode: {},
     instagramVisiblePublications: [],
+    formatDriftIssues: [],
     communityReplies: {},
     trackedProfiles: {},
     nextCaptureOrder: 1,
@@ -106,6 +108,7 @@ function instagramPlaceholderPublication(
     is_placeholder: true,
     visible_order: visibleOrder,
     visible_url: item.url,
+    captured_at: new Date().toISOString(),
     text: item.text || "",
     created_at: "",
     type: mediaType,
@@ -164,6 +167,17 @@ function migratePublicationRelations(
     ];
     delete store.engagementsByPublication[fromKey];
   }
+}
+
+function recordFormatDrift(store: BackgroundStore, issue: FormatDriftIssue) {
+  const duplicate = store.formatDriftIssues.some(
+    (existing) =>
+      existing.provider === issue.provider &&
+      existing.detector === issue.detector &&
+      existing.page_url === issue.page_url &&
+      existing.observed === issue.observed,
+  );
+  if (!duplicate) store.formatDriftIssues.push(issue);
 }
 
 function storePublication(store: BackgroundStore, publication: SocialPublication) {
@@ -225,7 +239,10 @@ function storeComment(store: BackgroundStore, comment: SocialComment) {
   const key = publicationKey(comment.provider, comment.publication_id);
   const existing = store.commentsByPublication[key] || [];
   if (!existing.some((item) => item.comment_id === comment.comment_id)) {
-    store.commentsByPublication[key] = [...existing, comment];
+    store.commentsByPublication[key] = [
+      ...existing,
+      { ...comment, captured_at: comment.captured_at || new Date().toISOString() },
+    ];
   }
 }
 
@@ -233,7 +250,10 @@ function storeEngagement(store: BackgroundStore, engagement: SocialEngagement) {
   const key = publicationKey(engagement.provider, engagement.publication_id);
   const existing = store.engagementsByPublication[key] || [];
   if (!existing.some((item) => item.engagement_id === engagement.engagement_id)) {
-    store.engagementsByPublication[key] = [...existing, engagement];
+    store.engagementsByPublication[key] = [
+      ...existing,
+      { ...engagement, captured_at: engagement.captured_at || new Date().toISOString() },
+    ];
   }
 }
 
@@ -252,6 +272,7 @@ function processXCapture(store: BackgroundStore, request: CapturedPayloadMessage
   const handle = store.trackedHandle.toLowerCase();
 
   if (request.endpoint === "UserTweets") {
+    const beforePublications = Object.keys(store.publications).length;
     processUserTweetsPayload(
       request.payload,
       store.trackedHandle,
@@ -275,6 +296,7 @@ function processXCapture(store: BackgroundStore, request: CapturedPayloadMessage
             provider: "x",
             publication_id: tweet.in_reply_to_tweet_id || tweet.tweet_id,
             kind: "comment",
+            captured_at: request.timestamp,
             engagement_id: publicationKey(
               "x",
               `${tweet.in_reply_to_tweet_id || tweet.tweet_id}:reply:${tweet.tweet_id}`,
@@ -285,6 +307,19 @@ function processXCapture(store: BackgroundStore, request: CapturedPayloadMessage
         }
       },
     );
+    const afterPublications = Object.keys(store.publications).length;
+    if (store.trackedHandle && beforePublications === afterPublications) {
+      recordFormatDrift(store, {
+        provider: "x",
+        detector: "x-user-tweets-parser",
+        severity: "warning",
+        expected: "UserTweets payload with timeline tweet entries for tracked handle",
+        observed: "No normalized publications were produced from captured UserTweets payload",
+        page_url: request.pageUrl,
+        captured_at: request.timestamp,
+        details: { endpoint: request.endpoint, tracked_handle: store.trackedHandle },
+      });
+    }
   }
 
   if (request.endpoint === "Favoriters") {
@@ -297,7 +332,10 @@ function processXCapture(store: BackgroundStore, request: CapturedPayloadMessage
       const freshUsers = users.filter((u) => !existing.has(u.rest_id));
       store.favoriters[tweetId].push(...freshUsers);
       for (const user of freshUsers) {
-        storeEngagement(store, favoriterToEngagement(tweetId, user));
+        storeEngagement(store, {
+          ...favoriterToEngagement(tweetId, user),
+          captured_at: request.timestamp,
+        });
       }
     }
   }
@@ -321,6 +359,7 @@ function processInstagramCapture(store: BackgroundStore, request: CapturedPayloa
   const pageShortcode = instagramShortcodeFromUrl(request.pageUrl);
 
   for (const publication of publications) {
+    publication.captured_at = publication.captured_at || request.timestamp;
     if (publication.shortcode && publication.shortcode === pageShortcode) {
       publication.capture_priority = 0;
     }
@@ -337,6 +376,7 @@ function processInstagramCapture(store: BackgroundStore, request: CapturedPayloa
   }
 
   for (const comment of extractInstagramComments(request.payload, request.pageUrl)) {
+    comment.captured_at = comment.captured_at || request.timestamp;
     comment.publication_id = resolveInstagramPublicationId(store, comment.publication_id);
     storeComment(store, comment);
     storeEngagement(store, {
@@ -348,12 +388,14 @@ function processInstagramCapture(store: BackgroundStore, request: CapturedPayloa
         `${comment.publication_id}:comment:${comment.comment_id}`,
       ),
       actor: comment.author,
+      captured_at: request.timestamp,
       engaged_at: comment.created_at,
     });
   }
 
   if (request.endpoint.includes("Liker") || request.endpoint.includes("LikedBy")) {
     for (const engagement of extractInstagramLikers(request.payload, request.pageUrl)) {
+      engagement.captured_at = engagement.captured_at || request.timestamp;
       engagement.publication_id = resolveInstagramPublicationId(store, engagement.publication_id);
       engagement.engagement_id = publicationKey(
         "instagram",
@@ -361,6 +403,24 @@ function processInstagramCapture(store: BackgroundStore, request: CapturedPayloa
       );
       storeEngagement(store, engagement);
     }
+  }
+
+  if (
+    ["InstagramFeedTimeline", "InstagramMedia", "InstagramPageSSR", "InstagramInitialSSR"].includes(
+      request.endpoint,
+    ) &&
+    publications.length === 0
+  ) {
+    recordFormatDrift(store, {
+      provider: "instagram",
+      detector: "instagram-publication-parser",
+      severity: "warning",
+      expected: "Instagram payload containing media records with code and pk/id fields",
+      observed: "No normalized publications were produced from captured Instagram payload",
+      page_url: request.pageUrl,
+      captured_at: request.timestamp,
+      details: { endpoint: request.endpoint },
+    });
   }
 }
 
@@ -391,6 +451,7 @@ function reprocessPayloads(store: BackgroundStore) {
   store.engagementsByPublication = {};
   store.instagramPublicationIdsByShortcode = {};
   store.instagramVisiblePublications = visiblePublications;
+  store.formatDriftIssues = [];
   store.communityReplies = {};
   store.tweets = {};
   store.favoriters = {};
@@ -487,6 +548,7 @@ function buildExportJSON(store: BackgroundStore): ExportJSON {
     comments_by_publication: store.commentsByPublication,
     engagements_by_publication: store.engagementsByPublication,
     raw_payloads: store.endpoints,
+    format_drift_issues: store.formatDriftIssues,
     tweets,
     community_replies: replies,
     favoriters_by_tweet: store.favoriters,
@@ -609,6 +671,21 @@ export function handleRuntimeMessage(
     return { success: true };
   }
 
+  if (request.action === "FORMAT_DRIFT_DETECTED") {
+    recordFormatDrift(store, {
+      provider: request.provider,
+      detector: request.detector,
+      severity: request.severity,
+      expected: request.expected,
+      observed: request.observed,
+      page_url: request.page_url,
+      captured_at: request.timestamp,
+      details: request.details,
+    });
+    store.lastUpdated = request.timestamp;
+    return { success: true };
+  }
+
   const capture = normalizeCapture(request);
   if (capture) {
     const ep = getEndpointStore(store, capture.provider, capture.endpoint);
@@ -652,6 +729,7 @@ export function handleRuntimeMessage(
       replyCount: Object.keys(store.communityReplies).length,
       accountInfo: store.accountInfo,
       trackedProfiles: store.trackedProfiles,
+      formatDriftIssues: store.formatDriftIssues,
       lastUpdated: store.lastUpdated,
     };
   }
@@ -672,7 +750,7 @@ export function handleRuntimeMessage(
   }
 
   if (request.action === "GET_ALL_RAW") {
-    return { endpoints: store.endpoints };
+    return { endpoints: store.endpoints, formatDriftIssues: store.formatDriftIssues };
   }
 
   if (request.action === "CLEAR_ALL") {

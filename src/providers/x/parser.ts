@@ -90,6 +90,7 @@ export function tweetToPublication(tweet: TweetData): SocialPublication {
   return {
     provider: "x",
     publication_id: tweet.tweet_id,
+    captured_at: "",
     text: tweet.text,
     created_at: tweet.created_at,
     type: tweet.type,
@@ -260,6 +261,7 @@ export function favoriterToEngagement(tweetId: string, user: Favoriter) {
     publication_id: tweetId,
     engagement_id: publicationKey("x", `${tweetId}:like:${user.rest_id || user.screen_name}`),
     kind: "like" as const,
+    captured_at: "",
     actor: {
       provider: "x" as const,
       provider_user_id: user.rest_id,

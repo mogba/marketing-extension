@@ -77,6 +77,7 @@ export function extractInstagramLikers(payload: unknown, pageUrl?: string): Soci
     provider: "instagram",
     publication_id: publicationId,
     kind: "like",
+    captured_at: "",
     engagement_id: publicationKey(
       "instagram",
       `${publicationId}:like:${actor.provider_user_id || actor.username}`,
@@ -104,6 +105,7 @@ export function mediaToPublication(media: AnyRecord | null | undefined): SocialP
   return {
     provider: "instagram",
     publication_id: publicationId,
+    captured_at: "",
     shortcode,
     text: compactText(media.caption?.text),
     created_at: toIsoFromUnix(media.taken_at),
@@ -146,6 +148,7 @@ function commentToSocialComment(
   return {
     provider: "instagram",
     publication_id: compactText(comment.media_id) || fallbackPublicationId,
+    captured_at: "",
     comment_id: commentId,
     author: userToActor(comment.user),
     text: compactText(comment.text),
